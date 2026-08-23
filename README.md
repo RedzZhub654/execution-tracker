@@ -86,6 +86,14 @@ and your secret — each call adds one execution for that game. The name
 your game or script. The first time a name is reported, it is added to the
 list automatically.
 
+If your loader already maps each game to a file name (like the Ouroboros loader
+at `https://github.com/joustingmatch/Ouroboros`), you do **not** need to type
+game names at all — use the file name as the game name. An example `loader.lua`
+is included in this repo that does this automatically: it cleans each file name
+(e.g. `grow-a-garden-2.lua` becomes `Grow A Garden 2`) and reports it before
+the game loads. Just set `TRACKER_URL` and `TRACKER_SECRET` at the top of that
+file and replace the friend's current loader with it.
+
 Roblox Lua (put this near the top of your script):
 
 ```lua
@@ -169,6 +177,7 @@ you outgrow that, the Workers Paid plan is $5/month and removes the caps.
 - `worker.js` — the whole app: Worker, Durable Object, dashboard, settings page.
 - `wrangler.toml` — Cloudflare config.
 - `emoji_icon.png`, `emoji_top.png` — custom icons used in the Discord message.
+- `loader.lua` — drop-in Ouroboros-style loader with the tracker built in (auto game names).
 - `README.md` — this file.
 
 ## Troubleshooting
