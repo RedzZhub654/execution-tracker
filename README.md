@@ -8,8 +8,10 @@ anyone running your script.
 
 - **Monitors the Ouroboros games folder** on GitHub
   (`joustingmatch/Ouroboros/games`). The worker fetches the live folder listing
-  every 30 minutes, so new folder files pass the display filter automatically
-  once a loader reports them — no worker redeploy needed.
+  every 30 minutes, so new folder files are resolved automatically once a
+  loader reports them — no worker redeploy needed. A bundled snapshot of the
+  folder ships with the worker as a fallback if the GitHub API is
+  rate-limited or down, so script loading keeps working either way.
 - **Only shows games that currently have executions.** A game with zero runs is
   never listed on Discord. A game stops appearing only if it is removed from
   the Ouroboros folder or its count is reset.
@@ -91,19 +93,35 @@ message is created immediately and refreshes every 10 seconds from then on.
 
 ## Use it in your loader
 
-You do **not** need to type any game names. The snippet below auto-detects the
-running game's name from Roblox itself, so the same code works across every
-game without changes. The worker matches names flexibly (case, spaces, and
-emojis are ignored), so `Grow A Garden 2`, `grow a garden 2`, and
-`🌱 Grow a Garden 2` all count as the same game.
+The included `loader.lua` is table-less: it auto-detects the running game's
+name from Roblox, asks the worker for that game's script, and runs it. **There
+is no game list to maintain** — when a new game is added to the Ouroboros repo,
+it works automatically the next time someone runs it (after the worker's
+30-minute folder refresh). Just set `URL` and `SECRET` at the top of the file:
 
-Roblox Lua (put this near the top of your script):
+```lua
+local URL = "https://execution-tracker.YOUR-SUBDOMAIN.workers.dev/api/script"
+local SECRET = "YOUR-SECRET-TOKEN" -- from the /settings page
+```
+
+The worker matches names flexibly (case, spaces, and emojis are ignored), so
+`Grow A Garden 2`, `grow a garden 2`, and `🌱 Grow a Garden 2` all resolve to the
+same folder file. A game resolves automatically when its Roblox name matches
+the repo file name after normalization; if a game does not resolve, the worker
+logs the reported name in `/api/catalog` so you can add an alias.
+
+`/api/script` (used above) resolves the game, fetches its script source from
+GitHub, counts the execution, and returns the source for the loader to run.
+`/api/report` is count-only — use it if you load scripts yourself and only want
+to track executions.
+
+If you only want to count executions (not load scripts), drop this snippet into
+your existing loader instead:
 
 ```lua
 local HttpService = game:GetService("HttpService")
 local MarketplaceService = game:GetService("MarketplaceService")
 
--- Replace these two values with your own:
 local URL = "https://execution-tracker.YOUR-SUBDOMAIN.workers.dev/api/report"
 local SECRET = "YOUR-SECRET-TOKEN"   -- from the /settings page
 
@@ -120,17 +138,8 @@ local function reportExecution()
     end)
 end
 
--- Call once when a player runs your script.
 reportExecution()
 ```
-
-If your loader already maps each game to a file name (like the Ouroboros loader
-at `https://github.com/joustingmatch/Ouroboros`), you do **not** need to detect
-names at all — use the file name as the game name. An example `loader.lua`
-is included in this repo that does this automatically: it cleans each file name
-(e.g. `grow-a-garden-2.lua` becomes `Grow A Garden 2`) and reports it before
-the game loads. Just set `TRACKER_URL` and `TRACKER_SECRET` at the top of that
-file and replace your current loader with it.
 
 JavaScript:
 
@@ -160,7 +169,8 @@ request for batching.
 |---|---|---|---|
 | GET | `/` | none | Live dashboard, refreshes every 10s |
 | GET | `/settings` | admin password | Configure webhook and mode |
-| POST | `/api/report` | API secret | Loader reports an execution |
+| POST | `/api/report` | API secret | Loader reports an execution (count only) |
+| GET | `/api/script` | API secret | Resolves the game, counts it, and returns the script source to run |
 | GET | `/api/stats` | none | JSON stats for the dashboard (active games only) |
 | GET | `/api/catalog` | none | Folder-monitor status |
 | GET | `/api/settings` | admin password | Read current config and secret |
@@ -187,10 +197,12 @@ you outgrow that, the Workers Paid plan is $5/month and removes the caps.
 
 ## Files
 
-- `worker.js` — the whole app: Worker, Durable Object, dashboard, settings page.
+- `worker.js` — the whole app: Worker, Durable Object, dashboard, settings page,
+  folder monitor, and script-serving endpoint.
 - `wrangler.toml` — Cloudflare config.
 - `emoji_icon.png`, `emoji_top.png` — custom icons used in the Discord message.
-- `loader.lua` — drop-in Ouroboros-style loader with the tracker built in (auto game names).
+- `loader.lua` — table-less drop-in loader: auto-detects the game and loads its
+  script from the worker (no game list to maintain).
 - `README.md` — this file.
 
 ## Troubleshooting

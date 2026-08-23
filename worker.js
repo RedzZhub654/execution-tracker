@@ -9,9 +9,253 @@ const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG; // 250
 const MAX_GAME_NAME_LEN = 80;
 const MAX_INCREMENT_PER_REQUEST = 1000;
 const CATALOG_TTL_MS = 30 * 60 * 1000; // refresh the folder listing every 30 min
+const SCRIPT_TTL_MS = 5 * 60 * 1000; // cache served script source for 5 min
 
 const OUROBOROS_GAMES_API =
   'https://api.github.com/repos/joustingmatch/Ouroboros/contents/games';
+
+const OUROBOROS_RAW_BASE =
+  'https://raw.githubusercontent.com/joustingmatch/Ouroboros/main/games/';
+
+// Bundled snapshot of the Ouroboros games folder. Used as a fallback when the
+// GitHub API is rate-limited or unreachable, so the worker can still resolve
+// and serve games. Refreshed from the live API every CATALOG_TTL_MS.
+const BUNDLED_FILES = [
+  'SpinjitsuEscape.lua',
+  'ageevolution.lua',
+  'airporttycoon.lua',
+  'anime-astral-simulator.lua',
+  'anime-battle-rng.lua',
+  'anime-card-farm.lua',
+  'anime-rng-defense.lua',
+  'anime-rng.lua',
+  'anime-squadron.lua',
+  'anime-story-2.lua',
+  'anime-ultraon-simulator.lua',
+  'anime-world-fighters.lua',
+  'animecoin.lua',
+  'animedice.lua',
+  'animeexpeditions.lua',
+  'animegirlpaint.lua',
+  'animejackpot.lua',
+  'animelootup.lua',
+  'animeshitseer.lua',
+  'animesouls.lua',
+  'animewarrng.lua',
+  'auraforbrainrots.lua',
+  'auraperclick.lua',
+  'automateares.lua',
+  'axe-rng.lua',
+  'backflipkeyboard.lua',
+  'beafishbait.lua',
+  'beanstalksquishy.lua',
+  'becomeabillionaire.lua',
+  'beehive.lua',
+  'beeremasters.lua',
+  'bemonkey.lua',
+  'bethefinalboss.lu',
+  'bidforanime.lua',
+  'bidforsoccercards.lua',
+  'billionairezoo.lua',
+  'bingo.lua',
+  'bo3zombies.lua',
+  'bomb-fishing.lua',
+  'breakdoors.lua',
+  'breaktape.lua',
+  'broketorich.lua',
+  'buildabaseandsteal',
+  'buildabutterflygarden.lua',
+  'buildagunarmy.lua',
+  'buildakeyboard.lua',
+  'buildanai.lua',
+  'buildapetfactory.lua',
+  'buildapetfarm.lua',
+  'buildaslime.lua',
+  'buildazoo.lua',
+  'buildorefarm.lua',
+  'capybarasvsplants.lua',
+  'cardealer.lua',
+  'carsvstape.lua',
+  'caseparadise.lua',
+  'catchaslop.lua',
+  'catchbillionducks.lua',
+  'catchntame.lua',
+  'chickenfarm.lua',
+  'cleankeycap.lua',
+  'cleanleaves.lua',
+  'click-simulator.lua',
+  'cliffmansion.lua',
+  'climbslop.lua',
+  'climbwaterslide.lua',
+  'coachafighter.lua',
+  'coinflip.lua',
+  'cookandsell.lua',
+  'crawfishing.lua',
+  'cutagem.lua',
+  'cutgrass.lua',
+  'dancinganimals.lua',
+  'defend-ur-base-with-anime.lua',
+  'defendringfarm.lua',
+  'dignclean.lua',
+  'dinohunters.lua',
+  'dmgper.lua',
+  'dontstealbobo.lua',
+  'doublejumpbike.lua',
+  'drainocean.lua',
+  'dreamkeyboard.lua',
+  'drillblocks.lua',
+  'drillforanime.lua',
+  'dungeonquest.lua',
+  'evomon.lua',
+  'farm-rng.lua',
+  'farmafish.lua',
+  'farmanisland.lua',
+  'fatperclick.lua',
+  'finalswarm.lua',
+  'fishanimrng.lua',
+  'fishforjunk.lua',
+  'fishperclick.lua',
+  'flowershop.lua',
+  'followersperclick.lua',
+  'footballbrainrot.lua',
+  'fruitsamurai.lua',
+  'gardencleaner.lua',
+  'gardenhorizons.lua',
+  'gardentower.lua',
+  'getfattobreaktape.lua',
+  'greedybrainrots.lua',
+  'greedygrowers.lua',
+  'grow-a-garden-2.lua',
+  'growchickenfighter.lua',
+  'growitrng.lua',
+  'hackabussiness.lua',
+  'hackperclick.lua',
+  'heatperclick.lua',
+  'heavyweightfishing.lua',
+  'heightperjump.lua',
+  'holefishing.lua',
+  'hoteltycoon.lua',
+  'hotsauce.lua',
+  'ironsoulsdungeon.lua',
+  'jumptostealslime.lua',
+  'jumptostealsoccer.lua',
+  'jumpycrunchy.lua',
+  'kawaiianimerng.lua',
+  'kickballtospace.lua',
+  'kittenkeyboardescape.lua',
+  'lakesipping.lua',
+  'launch-a-wheel.lua',
+  'lineage-piece.lua',
+  'loadthetruck.lua',
+  'loot-rng.lua',
+  'lootup.lua',
+  'lowball.lua',
+  'lucky-block-rush.lua',
+  'lumberfarm.lua',
+  'magicloot.lua',
+  'makeadrillfarm.lua',
+  'makesoccerplayers.lua',
+  'mansiontycoon.lua',
+  'meltice.lua',
+  'merge-a-nuke.lua',
+  'merge-vs-mobs.lua',
+  'mergeablackhole.lua',
+  'mergeamob.lua',
+  'mergeanimedefender.lua',
+  'mergeatanker.lua',
+  'mergeminiarmy.lua',
+  'mergeplantsvsmobs.lua',
+  'mergeswordzombies.lua',
+  'mineamountain.lua',
+  'minerrng.lua',
+  'miniwar.lua',
+  'missilesvscities.lua',
+  'moofarm.lua',
+  'muscleevolution.lua',
+  'muscleprisonbreak.lua',
+  'mutantplants.lua',
+  'mydinofarm.lua',
+  'myseafood.lua',
+  'mytoll.lua',
+  'oilempire.lua',
+  'pangame.lua',
+  'parkourpandemic.lua',
+  'penthouse.lua',
+  'petforest.lua',
+  'pickaxe-tycoon.lua',
+  'plushietd.lua',
+  'poopanorefarm.lua',
+  'poweracity.lua',
+  'powerperclick.lua',
+  'poweryourcity.lua',
+  'presskeycap.lua',
+  'prospecting.lua',
+  'pullaluckyfish.lua',
+  'rebirthfrenzy.lua',
+  'reeled.lua',
+  'reheads.lua',
+  'reign-piece.lua',
+  'rng-heroes.lua',
+  'rngvsfruit.lua',
+  'roll-to-defend.lua',
+  'roll2survive',
+  'rolladice.lua',
+  'rollagnome.lua',
+  'rollananime.lua',
+  'rollanarmy.lua',
+  'rollanarmyy.lua',
+  'rollanime.lua',
+  'rollanimedice.lua',
+  'rollanimetofight.lua',
+  'rollaspirit.lua',
+  'rollasuperhero.lua',
+  'rollforavataritems.lua',
+  'rollforchiikawa.lua',
+  'rolltosurvive.lua',
+  'saber-simulator.lua',
+  'saveanimals.lua',
+  'saveyourcat.lua',
+  'scale-slimy-fish.lua',
+  'scratchyloot.lua',
+  'screamperclick.lua',
+  'sellores.lua',
+  'shrinkperstep.lua',
+  'simonsays.lua',
+  'simplecowboysfarmer.lua',
+  'skinnyperstep.lua',
+  'slapacumslut',
+  'slimecardcollection.lua',
+  'snatchaseed.lua',
+  'snipebrainrots.lua',
+  'snowconestand.lua',
+  'somethingsexywillhappen.lua',
+  'speedevolve.lua',
+  'speedmonkeyescape.lua',
+  'spiderman.lua',
+  'spin-a-car.lua',
+  'spinafem.lua',
+  'standevolution.lua',
+  'starcatchers.lua',
+  'stealanegg.lua',
+  'stopbugs.lua',
+  'storagehunters.lua',
+  'superheroevolution.lua',
+  'survive-zombie-arena.lua',
+  'surviveanimearena.lua',
+  'swingerspickaxe.lua',
+  'swordempire.lua',
+  'throwacoin.lua',
+  'tollgame.lua',
+  'tree-rng.lua',
+  'tropicalresort.lua',
+  'unboxasmr.lua',
+  'untitled-melee-rng.lua',
+  'wingsforbrainrot.lua',
+  'world-cup-manager.lua',
+  'wtfisthisgamebrolmfao.lua',
+  'zombieturretfarm.lua',
+];
+
 
 const EMOJI = {
   icon: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_icon.png',
@@ -390,7 +634,25 @@ async function editDiscordMessage(wh, messageId, payload) {
   return { ok: true };
 }
 
-// Fetch the live list of game files from the Ouroboros repo.
+// Build a catalog Map from a list of file names. The raw URL is constructed
+// from the file name (raw.githubusercontent.com is a CDN, not rate-limited),
+// so we never depend on the API's download_url field.
+function buildCatalogFromFileNames(fileNames) {
+  const map = new Map();
+  for (const name of fileNames) {
+    if (/\.(lua|lu)$/i.test(name) || !name.includes('.')) {
+      const display = normalizeFileName(name);
+      const key = normalizeForMatch(display);
+      if (!map.has(key)) {
+        map.set(key, { name: display, file: name, rawUrl: OUROBOROS_RAW_BASE + name });
+      }
+    }
+  }
+  return map;
+}
+
+// Fetch the live list of game files from the Ouroboros repo via the GitHub API.
+// Returns null when rate-limited or unreachable (caller falls back to bundle).
 async function fetchGameCatalog(env) {
   const headers = { 'User-Agent': 'execution-tracker', 'Accept': 'application/vnd.github+json' };
   if (env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${env.GITHUB_TOKEN}`;
@@ -398,15 +660,13 @@ async function fetchGameCatalog(env) {
   if (!res.ok) return null;
   const data = await res.json();
   if (!Array.isArray(data)) return null;
-  const set = new Set();
-  for (const item of data) {
-    // Include .lua/.lu files AND extensionless game files (e.g. 'slapacumslut',
-    // 'buildabaseandsteal'). Skip files with any other extension.
-    if (item && item.type === 'file' && (/\.(lua|lu)$/i.test(item.name) || !item.name.includes('.'))) {
-      set.add(normalizeForMatch(normalizeFileName(item.name)));
-    }
-  }
-  return set;
+  return buildCatalogFromFileNames(data.filter((i) => i && i.type === 'file').map((i) => i.name));
+}
+
+// Resolve a reported game name to its folder entry (or null if not in folder).
+function resolveGame(gameName, catalog) {
+  if (!catalog) return null;
+  return catalog.get(normalizeForMatch(gameName)) || null;
 }
 
 export class TrackerDO {
@@ -441,7 +701,8 @@ export class TrackerDO {
 
   // Catalog is cached in memory + storage with a TTL. Re-fetches from GitHub
   // when the TTL expires so new games are picked up automatically. Falls back
-  // to the cached copy (marked stale) when GitHub is unreachable.
+  // to the cached copy (marked stale) when GitHub is unreachable, and finally
+  // to the bundled snapshot so the worker always has a catalog.
   async getCatalog() {
     const now = Date.now();
     if (this.catalog && now - this.catalogAt < CATALOG_TTL_MS) {
@@ -452,19 +713,25 @@ export class TrackerDO {
       this.catalog = fresh;
       this.catalogAt = now;
       this.catalogStale = false;
-      await this.state.storage.put('cfg:catalog', [...fresh]);
+      await this.state.storage.put('cfg:catalog', [...fresh.entries()]);
       await this.state.storage.put('cfg:catalogAt', now);
       return { catalog: fresh, stale: false };
     }
+    // GitHub API failed. Try the cached copy; validate it is a [[k,v],...] map
+    // (older deploys stored a flat string array, which would break new Map()).
     const cached = await this.state.storage.get('cfg:catalog');
-    if (cached) {
+    if (Array.isArray(cached) && cached.length && Array.isArray(cached[0])) {
       const cachedAt = (await this.state.storage.get('cfg:catalogAt')) || 0;
-      this.catalog = new Set(cached);
+      this.catalog = new Map(cached);
       this.catalogAt = cachedAt;
       this.catalogStale = true;
       return { catalog: this.catalog, stale: true };
     }
-    return { catalog: null, stale: false };
+    // Last resort: the bundled snapshot shipped with the worker.
+    this.catalog = buildCatalogFromFileNames(BUNDLED_FILES);
+    this.catalogAt = 0;
+    this.catalogStale = true;
+    return { catalog: this.catalog, stale: true };
   }
 
   async catalogStatus() {
@@ -488,11 +755,60 @@ export class TrackerDO {
     const inc = Math.max(1, Math.min(MAX_INCREMENT_PER_REQUEST, Number(increment) || 1));
 
     await this.load();
-    const next = (this.counts.get(game) || 0) + inc;
-    this.counts.set(game, next);
-    await this.state.storage.put('game:' + game, next);
+    // Count under the resolved folder name when possible, so the same game
+    // always accumulates under one key regardless of how its name was reported.
+    const { catalog } = await this.getCatalog();
+    const resolved = resolveGame(game, catalog);
+    const key = resolved ? resolved.name : game;
+    const next = (this.counts.get(key) || 0) + inc;
+    this.counts.set(key, next);
+    await this.state.storage.put('game:' + key, next);
     await this.ensureAlarm();
-    return { status: 200, json: { ok: true, game, count: next } };
+    return { status: 200, json: { ok: true, game: key, count: next } };
+  }
+
+  // One endpoint that resolves the running game to its Ouroboros script file,
+  // fetches its source, counts the execution, and returns the source to run.
+  // The count is only incremented after the script source is in hand.
+  async serveScript(gameName, secret) {
+    const cfg = await this.getConfig();
+    if (!cfg.apiSecret || secret !== cfg.apiSecret) return { status: 401, json: { error: 'Invalid or missing secret' } };
+    const game = sanitizeGameName(gameName);
+    if (!game) return { status: 400, json: { error: 'Missing game name' } };
+
+    await this.load();
+    const { catalog } = await this.getCatalog();
+    if (!catalog) return { status: 503, json: { error: 'Catalog unavailable' } };
+    const entry = resolveGame(game, catalog);
+    if (!entry) return { status: 404, json: { error: 'Game not found in Ouroboros folder', game } };
+
+    // Fetch the script source first — only count once we can actually serve it.
+    const content = await this.fetchScriptContent(entry);
+    if (content == null) return { status: 502, json: { error: 'Could not fetch script from GitHub', game: entry.name } };
+
+    const next = (this.counts.get(entry.name) || 0) + 1;
+    this.counts.set(entry.name, next);
+    await this.state.storage.put('game:' + entry.name, next);
+    await this.ensureAlarm();
+    return { status: 200, body: content };
+  }
+
+  // Cache script source for a short TTL so repeat executions don't hammer GitHub.
+  async fetchScriptContent(entry) {
+    const key = 'script:' + entry.file;
+    const cached = await this.state.storage.get(key);
+    const cachedAt = (await this.state.storage.get(key + ':at')) || 0;
+    if (cached && Date.now() - cachedAt < SCRIPT_TTL_MS) return cached;
+    try {
+      const res = await fetch(entry.rawUrl, { headers: { 'User-Agent': 'execution-tracker' } });
+      if (!res.ok) return cached || null;
+      const text = await res.text();
+      await this.state.storage.put(key, text);
+      await this.state.storage.put(key + ':at', Date.now());
+      return text;
+    } catch {
+      return cached || null;
+    }
   }
 
   async stats() {
@@ -647,6 +963,18 @@ export class TrackerDO {
       const body = await readReportInput(request, url);
       const result = await this.report(body.game, body.count, body.secret);
       return json(result.status, result.json);
+    }
+
+    if (path === '/api/script' && (request.method === 'POST' || request.method === 'GET')) {
+      const body = await readReportInput(request, url);
+      const r = await this.serveScript(body.game, body.secret);
+      if (r.body !== undefined) {
+        return new Response(r.body, {
+          status: r.status,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...corsHeaders() },
+        });
+      }
+      return json(r.status, r.json);
     }
 
     if (path === '/api/catalog' && request.method === 'GET') {
