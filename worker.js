@@ -1,17 +1,10 @@
-// Execution Tracker — Cloudflare Worker + Durable Object.
-// Tracks per-game script executions and mirrors them to an auto-updating
-// Discord webhook message. The webhook URL and counts live inside the
-// Durable Object; loaders only ever see an API endpoint + a secret token.
-
 const REFRESH_INTERVAL_MS = 10_000;
 const MAX_FIELDS_PER_EMBED = 25;
 const MAX_EMBEDS_PER_MSG = 10;
-const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG; // 250
+const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG;
 const MAX_GAME_NAME_LEN = 80;
 const MAX_INCREMENT_PER_REQUEST = 1000;
 
-// Custom-generated icon images, committed to the repo and served by GitHub raw.
-// Used as the embed thumbnail and footer icon instead of standard emoji.
 const EMOJI = {
   icon: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_icon.png',
   top: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_top.png',
@@ -251,7 +244,6 @@ function computeTotal(countsMap) {
 const TEXT_DISPLAY_MAX = 2000;
 const CONTAINER_MAX = 10;
 
-// Split game lines into TextDisplay-sized chunks (each <= TEXT_DISPLAY_MAX chars).
 function chunkGameLines(games) {
   const chunks = [];
   let cur = '';
@@ -268,8 +260,6 @@ function chunkGameLines(games) {
   return chunks.length ? chunks : ['No games tracked yet.'];
 }
 
-// Components v2 message: one container with a title section (bar-chart icon)
-// and the grand total. Master mode = total only.
 function buildMasterMessage(countsMap) {
   const total = computeTotal(countsMap);
   return {
@@ -294,8 +284,6 @@ function buildMasterMessage(countsMap) {
   };
 }
 
-// Components v2 message: title section (bar-chart icon) + top-game section
-// (trophy icon) + the full game list as chunked TextDisplays.
 function buildLongMessage(countsMap) {
   const games = sortedGames(countsMap);
   const total = computeTotal(countsMap);
@@ -560,7 +548,6 @@ export class TrackerDO {
     try {
       await this.refreshDiscord();
     } catch (e) {
-      // Swallow; the loop must continue.
     } finally {
       await this.state.storage.setAlarm(Date.now() + REFRESH_INTERVAL_MS);
     }
@@ -584,14 +571,14 @@ async function readReportInput(request, url) {
           count = count ?? b.count;
           secret = secret || b.secret || '';
         }
-      } catch { /* ignore */ }
+      } catch {}
     } else if (ct.includes('application/x-www-form-urlencoded')) {
       try {
         const b = await request.formData();
         game = game || b.get('game') || '';
         count = count ?? b.get('count');
         secret = secret || b.get('secret') || '';
-      } catch { /* ignore */ }
+      } catch {}
     }
   }
   return { game, count, secret };

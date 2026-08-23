@@ -2,24 +2,13 @@ name = "execution-tracker"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
-# Set the admin password as a SECRET (never as plaintext config).
-# After your first deploy, run:
-#     wrangler secret put ADMIN_PASSWORD
-# and paste a strong password. The /settings page won't work until this is set.
-
-# The Durable Object that stores all state + runs the 10-second refresh alarm.
 [[durable_objects.bindings]]
 name = "TRACKER"
 class_name = "TrackerDO"
 
-# Required for the first deploy so Cloudflare creates the Durable Object.
-# Use new_sqlite_classes (SQLite backend) — this is the ONLY backend available
-# on the free Workers plan, and the only one new accounts can create.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TrackerDO"]
 
-# Safety net: pokes the Durable Object every minute so the 10-second alarm
-# can never get stuck "off". (The alarm reschedules itself every 10s on its own.)
 [triggers]
 crons = ["* * * * *"]
