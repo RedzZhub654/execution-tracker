@@ -1,27 +1,19 @@
-/**
- * Execution Tracker — Cloudflare Worker + Durable Object
- * -------------------------------------------------------
- * One code file. Tracks per-game script executions, stores a Discord
- * webhook URL securely inside Cloudflare (never exposed to loaders),
- * and auto-refreshes a Discord webhook message every 10 seconds with
- * all games + a grand total.
- *
- * See README.md for setup.
- */
+// Execution Tracker — Cloudflare Worker + Durable Object.
+// Tracks per-game script executions and mirrors them to an auto-updating
+// Discord webhook message. The webhook URL and counts live inside the
+// Durable Object; loaders only ever see an API endpoint + a secret token.
 
-// ---------------------------------------------------------------------------
-// Configuration constants
-// ---------------------------------------------------------------------------
-const REFRESH_INTERVAL_MS = 10_000;          // 10-second auto-refresh
-const MAX_FIELDS_PER_EMBED = 25;             // Discord limit
-const MAX_EMBEDS_PER_MSG = 10;               // Discord limit
+const REFRESH_INTERVAL_MS = 10_000;
+const MAX_FIELDS_PER_EMBED = 25;
+const MAX_EMBEDS_PER_MSG = 10;
 const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG; // 250
 const MAX_GAME_NAME_LEN = 80;
-const MAX_INCREMENT_PER_REQUEST = 1000;      // anti-abuse cap
+const MAX_INCREMENT_PER_REQUEST = 1000;
 
-// ---------------------------------------------------------------------------
-// HTML pages (dashboard + settings)
-// ---------------------------------------------------------------------------
+// Default emoji set, written to storage on first use and read back at runtime.
+// Encoded as Unicode escapes so the source file contains no emoji glyphs.
+const DEFAULT_EMOJIS = { icon: '\u{1F4CA}', top: '\u{1F3C6}' };
+
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -53,7 +45,7 @@ const DASHBOARD_HTML = `<!doctype html>
   .sub{color:var(--muted);font-size:13px;margin-top:2px}
   .live{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--green);
         background:#0b1410;border:1px solid #1f3a2b;padding:8px 13px;border-radius:999px}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 #34d39980;animation:pulse 1.6s infinite}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
   @keyframes pulse{0%{box-shadow:0 0 0 0 #34d39970}70%{box-shadow:0 0 0 9px #34d39900}100%{box-shadow:0 0 0 0 #34d39900}}
   .hero{margin-top:26px;background:linear-gradient(180deg,var(--panel),var(--panel2));
         border:1px solid var(--border);border-radius:20px;padding:30px;position:relative;overflow:hidden}
@@ -71,8 +63,6 @@ const DASHBOARD_HTML = `<!doctype html>
         background:linear-gradient(90deg,#fff,#9ad8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
   .empty{text-align:center;color:var(--muted);padding:70px 0;font-size:14px}
   .updated{margin-top:24px;color:var(--muted);font-size:12px;text-align:center}
-  .skeleton{background:linear-gradient(90deg,#141723,#1b1f30,#141723);background-size:200% 100%;animation:sh 1.2s infinite;border-radius:8px}
-  @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
   .foot{margin-top:34px;color:var(--muted);font-size:12px;text-align:center}
   a{color:var(--accent2);text-decoration:none}
 </style>
@@ -111,7 +101,7 @@ async function load(){
     if(!d.games||!d.games.length){g.innerHTML='<div class="empty">No executions tracked yet. Run a script to get started.</div>';return;}
     g.innerHTML=d.games.map(x=>'<div class="card"><div class="name">'+esc(x.name)+'</div><div class="count">'+fmt(x.count)+'</div></div>').join('');
     $('updated').textContent='Updated '+(d.updatedAt?new Date(d.updatedAt).toLocaleTimeString():'');
-  }catch(e){$('updated').textContent='Connecting…';}
+  }catch(e){$('updated').textContent='Connecting...';}
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 load(); setInterval(load,10000);
@@ -163,7 +153,7 @@ const SETTINGS_HTML = `<!doctype html>
   <div class="card" id="pwCard">
     <label>Admin password</label>
     <div class="pwrow">
-      <input type="password" id="pw" placeholder="The ADMIN_PASSWORD you set in wrangler.toml">
+      <input type="password" id="pw" placeholder="The ADMIN_PASSWORD you set with wrangler secret">
       <button id="unlockBtn">Unlock</button>
     </div>
     <div class="err" id="pwErr">Wrong password.</div>
@@ -207,7 +197,7 @@ $('unlockBtn').onclick=async()=>{
   pw=$('pw').value;
   const r=await fetch('/api/settings',{headers:{'X-Admin-Password':pw}});
   if(r.status===401){$('pwErr').style.display='block';return;}
-  if(r.status===503){$('pwErr').textContent='Admin password not set on the server. Set ADMIN_PASSWORD in wrangler.toml.';$('pwErr').style.display='block';return;}
+  if(r.status===503){$('pwErr').textContent='Admin password not set on the server. Run: wrangler secret put ADMIN_PASSWORD';$('pwErr').style.display='block';return;}
   $('pwErr').style.display='none';$('pwCard').style.display='none';$('form').style.display='block';
   const d=await r.json();
   if(d.webhookSet)$('webhook').value='(already stored — re-enter to change)';
@@ -233,9 +223,6 @@ $('save').onclick=async()=>{
 </body>
 </html>`;
 
-// ---------------------------------------------------------------------------
-// Pure helpers (unit-testable)
-// ---------------------------------------------------------------------------
 function sanitizeGameName(raw) {
   if (typeof raw !== 'string') return '';
   let s = raw.replace(/[\r\n\t]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').trim();
@@ -258,12 +245,15 @@ function computeTotal(countsMap) {
   return t;
 }
 
-// Build the embed payload for "master" mode (grand total only).
-function buildMasterEmbeds(countsMap) {
+function titleWithIcon(emojis) {
+  return emojis && emojis.icon ? emojis.icon + ' Execution Tracker' : 'Execution Tracker';
+}
+
+function buildMasterEmbeds(countsMap, emojis) {
   const total = computeTotal(countsMap);
   const gamesCount = countsMap.size;
   return [{
-    title: '📊 Execution Tracker',
+    title: titleWithIcon(emojis),
     description: `### Total Executions\n# ${formatNum(total)}`,
     color: 0x34d399,
     timestamp: new Date().toISOString(),
@@ -271,22 +261,22 @@ function buildMasterEmbeds(countsMap) {
   }];
 }
 
-// Build up to 10 embeds (25 fields each) for "long" mode.
-function buildLongEmbeds(countsMap) {
+function buildLongEmbeds(countsMap, emojis) {
   const games = sortedGames(countsMap);
   const total = computeTotal(countsMap);
   const capped = games.slice(0, MAX_LONG_GAMES);
+  const topIcon = emojis && emojis.top ? emojis.top + ' ' : '';
   const embeds = [];
   for (let i = 0; i < capped.length; i += MAX_FIELDS_PER_EMBED) {
     const chunk = capped.slice(i, i + MAX_FIELDS_PER_EMBED);
-    const fields = chunk.map(([name, count]) => ({
-      name: name.slice(0, MAX_GAME_NAME_LEN),
+    const fields = chunk.map(([name, count], idx) => ({
+      name: (i === 0 && idx === 0 ? topIcon : '') + name.slice(0, MAX_GAME_NAME_LEN),
       value: formatNum(count),
       inline: true,
     }));
     const embed = { color: 0x8b5cf6, fields };
     if (i === 0) {
-      embed.title = '📊 Execution Tracker';
+      embed.title = titleWithIcon(emojis);
       embed.description = `**Total Executions:** ${formatNum(total)}${games.length > capped.length ? ` (+${games.length - capped.length} more)` : ''}`;
       embed.timestamp = new Date().toISOString();
     }
@@ -297,7 +287,7 @@ function buildLongEmbeds(countsMap) {
   }
   if (embeds.length === 0) {
     embeds.push({
-      title: '📊 Execution Tracker',
+      title: titleWithIcon(emojis),
       description: `**Total Executions:** 0`,
       color: 0x8b5cf6,
       timestamp: new Date().toISOString(),
@@ -307,9 +297,6 @@ function buildLongEmbeds(countsMap) {
   return embeds;
 }
 
-// ---------------------------------------------------------------------------
-// Discord webhook helpers
-// ---------------------------------------------------------------------------
 function webhookFromUrl(url) {
   const m = /^https?:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/(\d+)\/([A-Za-z0-9_\-]+)/i.exec(url.trim());
   if (!m) return null;
@@ -340,17 +327,13 @@ async function editDiscordMessage(wh, messageId, embeds) {
   return { ok: true };
 }
 
-// ---------------------------------------------------------------------------
-// Durable Object
-// ---------------------------------------------------------------------------
 export class TrackerDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.counts = null; // Map<string, number>, lazy-loaded from storage
+    this.counts = null;
   }
 
-  // Load all game counts into an in-memory map (once per DO instance).
   async load() {
     if (this.counts) return;
     this.counts = new Map();
@@ -361,13 +344,19 @@ export class TrackerDO {
   }
 
   async getConfig() {
-    const [webhook, mode, messageId, apiSecret] = await Promise.all([
+    const [webhook, mode, messageId, apiSecret, emojis] = await Promise.all([
       this.state.storage.get('cfg:webhook'),
       this.state.storage.get('cfg:mode'),
       this.state.storage.get('cfg:messageId'),
       this.state.storage.get('cfg:apiSecret'),
+      this.state.storage.get('cfg:emojis'),
     ]);
-    return { webhook, mode: mode || 'long', messageId, apiSecret };
+    const cfg = { webhook, mode: mode || 'long', messageId, apiSecret, emojis };
+    if (!emojis) {
+      cfg.emojis = { ...DEFAULT_EMOJIS };
+      await this.state.storage.put('cfg:emojis', cfg.emojis);
+    }
+    return cfg;
   }
 
   async ensureAlarm() {
@@ -375,7 +364,6 @@ export class TrackerDO {
     if (!alarm) await this.state.storage.setAlarm(Date.now() + REFRESH_INTERVAL_MS);
   }
 
-  // Loader endpoint: increment a game's execution count.
   async report(gameName, increment, secret) {
     const cfg = await this.getConfig();
     if (!cfg.apiSecret || secret !== cfg.apiSecret) return { status: 401, json: { error: 'Invalid or missing secret' } };
@@ -391,7 +379,6 @@ export class TrackerDO {
     return { status: 200, json: { ok: true, game, count: next } };
   }
 
-  // Dashboard endpoint: return current stats.
   async stats() {
     await this.load();
     const games = sortedGames(this.counts).map(([name, count]) => ({ name, count }));
@@ -406,7 +393,6 @@ export class TrackerDO {
     };
   }
 
-  // Create or edit the Discord message. Returns { ok, messageId, error }.
   async pushToDiscord(wh, embeds, messageId) {
     if (messageId) {
       const r = await editDiscordMessage(wh, messageId, embeds);
@@ -421,14 +407,13 @@ export class TrackerDO {
     return c.id ? { ok: true, messageId: c.id } : { ok: false, error: c.error };
   }
 
-  // Refresh the Discord webhook message (called by the alarm).
   async refreshDiscord() {
     await this.load();
     const cfg = await this.getConfig();
     if (!cfg.webhook) return;
     const wh = webhookFromUrl(cfg.webhook);
     if (!wh) return;
-    const embeds = cfg.mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
+    const embeds = cfg.mode === 'master' ? buildMasterEmbeds(this.counts, cfg.emojis) : buildLongEmbeds(this.counts, cfg.emojis);
     const r = await this.pushToDiscord(wh, embeds, cfg.messageId);
     if (r.messageId && r.messageId !== cfg.messageId) {
       await this.state.storage.put('cfg:messageId', r.messageId);
@@ -464,7 +449,6 @@ export class TrackerDO {
     if (!webhook) return { status: 400, json: { error: 'A Discord webhook URL is required' } };
     const mode = body.mode === 'master' ? 'master' : 'long';
 
-    // Generate an API secret on first setup.
     let apiSecret = cfg.apiSecret;
     if (!apiSecret) {
       apiSecret = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
@@ -474,13 +458,11 @@ export class TrackerDO {
     await this.state.storage.put('cfg:webhook', webhook);
     await this.state.storage.put('cfg:mode', mode);
     await this.state.storage.put('cfg:apiSecret', apiSecret);
-    // Reset the stored message id so a fresh message is created for the new webhook/mode.
     await this.state.storage.delete('cfg:messageId');
     await this.ensureAlarm();
 
-    // Explicitly create the first message and surface any failure to the user.
     const wh = webhookFromUrl(webhook);
-    const embeds = mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
+    const embeds = mode === 'master' ? buildMasterEmbeds(this.counts, cfg.emojis) : buildLongEmbeds(this.counts, cfg.emojis);
     const created = await createDiscordMessage(wh, embeds);
     if (!created.id) {
       return {
@@ -505,23 +487,17 @@ export class TrackerDO {
     const path = url.pathname;
     const origin = url.origin;
 
-    // CORS preflight + permissive headers for loader/dashboard endpoints.
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders() });
     }
 
-    // Internal safety-net poke from the Worker scheduled (cron) handler.
     if (path === '/internal/poke') {
       await this.ensureAlarm();
       return json(200, { ok: true });
     }
 
-    if (path === '/' && request.method === 'GET') {
-      return html(DASHBOARD_HTML);
-    }
-    if (path === '/settings' && request.method === 'GET') {
-      return html(SETTINGS_HTML);
-    }
+    if (path === '/' && request.method === 'GET') return html(DASHBOARD_HTML);
+    if (path === '/settings' && request.method === 'GET') return html(SETTINGS_HTML);
 
     if (path === '/api/stats' && request.method === 'GET') {
       const r = await this.stats();
@@ -551,7 +527,6 @@ export class TrackerDO {
     return json(404, { error: 'Not found' });
   }
 
-  // Durable Object alarm handler — refresh Discord, then reschedule.
   async alarm() {
     try {
       await this.refreshDiscord();
@@ -563,9 +538,6 @@ export class TrackerDO {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Request parsing for /api/report (supports JSON body, query, or headers)
-// ---------------------------------------------------------------------------
 async function readReportInput(request, url) {
   let game = url.searchParams.get('game') || '';
   let count = url.searchParams.get('count');
@@ -596,9 +568,6 @@ async function readReportInput(request, url) {
   return { game, count, secret };
 }
 
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -606,6 +575,7 @@ function corsHeaders() {
     'Access-Control-Allow-Headers': 'Content-Type, X-API-Secret, X-Admin-Password, Authorization',
   };
 }
+
 function json(status, body) {
   return new Response(JSON.stringify(body), {
     status,
@@ -616,6 +586,7 @@ function json(status, body) {
     },
   });
 }
+
 function html(content) {
   return new Response(content, {
     headers: {
@@ -625,21 +596,13 @@ function html(content) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Worker entry — routes everything to a single global Durable Object.
-// Also runs a 1-minute cron as a safety net so the alarm never stays dead.
-// ---------------------------------------------------------------------------
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const id = env.TRACKER.idFromName('global');
-    const stub = env.TRACKER.get(id);
-    return stub.fetch(request);
+    return env.TRACKER.get(id).fetch(request);
   },
-  async scheduled(event, env, ctx) {
+  async scheduled(event, env) {
     const id = env.TRACKER.idFromName('global');
-    const stub = env.TRACKER.get(id);
-    await stub.fetch(new Request('https://internal/internal/poke'));
+    await env.TRACKER.get(id).fetch(new Request('https://internal/internal/poke'));
   },
 };
-
-
