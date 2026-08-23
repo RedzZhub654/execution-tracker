@@ -1,9 +1,17 @@
+// Execution Tracker — Cloudflare Worker + Durable Object
+// Monitors the Ouroboros games folder on GitHub and shows a live, auto-updating
+// Discord message listing ONLY games that currently have executions.
+
 const REFRESH_INTERVAL_MS = 10_000;
 const MAX_FIELDS_PER_EMBED = 25;
 const MAX_EMBEDS_PER_MSG = 10;
-const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG;
+const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG; // 250
 const MAX_GAME_NAME_LEN = 80;
 const MAX_INCREMENT_PER_REQUEST = 1000;
+const CATALOG_TTL_MS = 30 * 60 * 1000; // refresh the folder listing every 30 min
+
+const OUROBOROS_GAMES_API =
+  'https://api.github.com/repos/joustingmatch/Ouroboros/contents/games';
 
 const EMOJI = {
   icon: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_icon.png',
@@ -92,11 +100,12 @@ async function load(){
     const r=await fetch('/api/stats',{cache:'no-store'});
     const d=await r.json();
     $('total').textContent=fmt(d.total);
-    $('gamesSub').textContent='across '+fmt(d.gamesCount)+' game'+(d.gamesCount===1?'':'s');
+    const sub='across '+fmt(d.gamesCount)+' active game'+(d.gamesCount===1?'':'s')+(d.trackedGames?(' of '+fmt(d.trackedGames)+' tracked'):'');
+    $('gamesSub').textContent=sub;
     const g=$('grid');
-    if(!d.games||!d.games.length){g.innerHTML='<div class="empty">No executions tracked yet. Run a script to get started.</div>';return;}
+    if(!d.games||!d.games.length){g.innerHTML='<div class="empty">No active games yet. Only games with executions are shown.</div>';return;}
     g.innerHTML=d.games.map(x=>'<div class="card"><div class="name">'+esc(x.name)+'</div><div class="count">'+fmt(x.count)+'</div></div>').join('');
-    $('updated').textContent='Updated '+(d.updatedAt?new Date(d.updatedAt).toLocaleTimeString():'');
+    $('updated').textContent='Updated '+(d.updatedAt?new Date(d.updatedAt).toLocaleTimeString():'')+(d.catalogStale?' · folder list unavailable, using cached':'');
   }catch(e){$('updated').textContent='Connecting...';}
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -136,6 +145,7 @@ const SETTINGS_HTML = `<!doctype html>
   .out .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent2);word-break:break-all}
   .ok{color:var(--green);font-size:13px;margin-top:12px;display:none}
   .err{color:var(--red);font-size:13px;margin-top:12px;display:none}
+  .warn{color:#fbbf24;font-size:12px;margin-top:10px;display:none}
   .pwrow{display:flex;gap:8px;align-items:center}
   .pwrow button{width:auto;margin:0;padding:10px 14px}
   a{color:var(--accent2);text-decoration:none}
@@ -164,19 +174,23 @@ const SETTINGS_HTML = `<!doctype html>
     <div class="card">
       <label>Webhook display mode</label>
       <div class="seg" id="seg">
-        <label data-mode="long"><input type="radio" name="mode" value="long" checked><div><div class="t">Long — list every game</div><div class="d">All games + counts + total. Best under 250 games.</div></div></label>
-        <label data-mode="master"><input type="radio" name="mode" value="master"><div><div class="t">Master — grand total only</div><div class="d">One big number summing all games. Best for 200+ games.</div></div></label>
+        <label data-mode="long"><input type="radio" name="mode" value="long" checked><div><div class="t">Long — list every active game</div><div class="d">Active games + counts + total. Best under 250 games.</div></div></label>
+        <label data-mode="master"><input type="radio" name="mode" value="master"><div><div class="t">Master — grand total only</div><div class="d">One big number summing all active games. Best for 200+ games.</div></div></label>
       </div>
+      <div class="hint" style="margin-top:10px">Only games that currently have executions are shown. New games appear automatically once they are reported.</div>
     </div>
     <button id="save">Save &amp; activate webhook</button>
     <div class="ok" id="ok">Saved. The Discord message will auto-refresh every 10 seconds.</div>
     <div class="err" id="err"></div>
+    <div class="warn" id="warn"></div>
 
     <div class="out" id="out">
       <div class="k">Loader API endpoint (put this in your loader)</div>
       <div class="v" id="reportUrl"></div>
       <div class="k">Secret token (required by the endpoint)</div>
       <div class="v" id="secret"></div>
+      <div class="k">Folder monitor status</div>
+      <div class="v" id="catalogStatus" style="color:var(--muted);font-family:inherit">Loading...</div>
       <div class="hint" style="margin-top:14px">Never share the secret. The webhook URL itself stays hidden in Cloudflare.</div>
     </div>
   </div>
@@ -198,9 +212,10 @@ $('unlockBtn').onclick=async()=>{
   const d=await r.json();
   if(d.webhookSet)$('webhook').value='(already stored — re-enter to change)';
   if(d.mode){document.querySelector('input[name=mode][value='+d.mode+']').checked=true;segSelect();}
+  $('catalogStatus').textContent=d.catalogStatus||'Unknown';
 };
 $('save').onclick=async()=>{
-  $('ok').style.display='none';$('err').style.display='none';$('save').disabled=true;
+  $('ok').style.display='none';$('err').style.display='none';$('warn').style.display='none';$('save').disabled=true;
   let webhook=$('webhook').value.trim();
   if(webhook==='(already stored — re-enter to change)')webhook='';
   const mode=document.querySelector('input[name=mode]:checked').value;
@@ -211,7 +226,9 @@ $('save').onclick=async()=>{
     $('ok').style.display='block';
     $('reportUrl').textContent=d.reportUrl;
     $('secret').textContent=d.apiSecret;
+    $('catalogStatus').textContent=d.catalogStatus||'Unknown';
     $('out').style.display='block';
+    if(d.lastError){$('warn').textContent='Last Discord error: '+d.lastError;$('warn').style.display='block';}
   }catch(e){$('err').textContent=String(e);$('err').style.display='block';}
   finally{$('save').disabled=false;}
 };
@@ -227,6 +244,14 @@ function sanitizeGameName(raw) {
   return s;
 }
 
+// Mirror of loader.lua cleanName: strip extension, dashes to spaces, title-case.
+function normalizeFileName(file) {
+  let name = String(file).replace(/\.lu$/i, '').replace(/\.lua$/i, '');
+  name = name.replace(/-/g, ' ');
+  name = name.replace(/([a-zA-Z])([a-zA-Z0-9]*)/g, (_, f, r) => f.toUpperCase() + r);
+  return name;
+}
+
 function formatNum(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
@@ -235,9 +260,17 @@ function sortedGames(countsMap) {
   return [...countsMap.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-function computeTotal(countsMap) {
+// Only games that (a) have executions AND (b) exist in the Ouroboros folder.
+// If the catalog is unavailable, fall back to all games with executions.
+function filterActiveGames(countsMap, catalog) {
+  const games = sortedGames(countsMap);
+  if (!catalog) return games;
+  return games.filter(([name]) => catalog.has(name));
+}
+
+function computeTotal(games) {
   let t = 0;
-  for (const v of countsMap.values()) t += v;
+  for (const [, count] of games) t += count;
   return t;
 }
 
@@ -257,14 +290,17 @@ function chunkGameLines(games) {
     }
   }
   if (cur) chunks.push(cur);
-  return chunks.length ? chunks : ['No games tracked yet.'];
+  return chunks.length ? chunks : ['No active games yet.'];
 }
 
-function buildMasterMessage(countsMap) {
-  const total = computeTotal(countsMap);
+// Disable all mentions and formatting injection from game names.
+const MENTIONS = { parse: [] };
+
+function buildMasterMessage(games, total) {
   return {
     flags: 32768,
     username: 'Execution Tracker',
+    allowed_mentions: MENTIONS,
     components: [
       {
         type: 17,
@@ -284,10 +320,8 @@ function buildMasterMessage(countsMap) {
   };
 }
 
-function buildLongMessage(countsMap) {
-  const games = sortedGames(countsMap);
-  const total = computeTotal(countsMap);
-
+function buildLongMessage(games, total) {
+  const capped = games.slice(0, MAX_LONG_GAMES);
   const header = {
     type: 9,
     components: [
@@ -298,17 +332,17 @@ function buildLongMessage(countsMap) {
   };
   const children = [header, { type: 14, divider: true, spacing: 1 }];
 
-  if (games.length) {
+  if (capped.length) {
     children.push({
       type: 9,
       components: [
         { type: 10, content: '### Top Game' },
-        { type: 10, content: `**${games[0][0].slice(0, MAX_GAME_NAME_LEN)}** \u2014 ${formatNum(games[0][1])}` },
+        { type: 10, content: `**${capped[0][0].slice(0, MAX_GAME_NAME_LEN)}** \u2014 ${formatNum(capped[0][1])}` },
       ],
       accessory: { type: 11, media: { url: EMOJI.top } },
     });
     children.push({ type: 14, divider: true, spacing: 1 });
-    for (const c of chunkGameLines(games.slice(1))) {
+    for (const c of chunkGameLines(capped.slice(1))) {
       children.push({ type: 10, content: c });
     }
   }
@@ -317,7 +351,7 @@ function buildLongMessage(countsMap) {
   for (let i = 0; i < children.length; i += CONTAINER_MAX) {
     containers.push({ type: 17, accent_color: 0x8b5cf6, components: children.slice(i, i + CONTAINER_MAX) });
   }
-  return { flags: 32768, username: 'Execution Tracker', components: containers };
+  return { flags: 32768, username: 'Execution Tracker', allowed_mentions: MENTIONS, components: containers };
 }
 
 function webhookFromUrl(url) {
@@ -350,11 +384,33 @@ async function editDiscordMessage(wh, messageId, payload) {
   return { ok: true };
 }
 
+// Fetch the live list of game files from the Ouroboros repo.
+async function fetchGameCatalog(env) {
+  const headers = { 'User-Agent': 'execution-tracker', 'Accept': 'application/vnd.github+json' };
+  if (env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${env.GITHUB_TOKEN}`;
+  const res = await fetch(OUROBOROS_GAMES_API, { headers });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!Array.isArray(data)) return null;
+  const set = new Set();
+  for (const item of data) {
+    // Include .lua/.lu files AND extensionless game files (e.g. 'slapacumslut',
+    // 'buildabaseandsteal'). Skip files with any other extension.
+    if (item && item.type === 'file' && (/\.(lua|lu)$/i.test(item.name) || !item.name.includes('.'))) {
+      set.add(normalizeFileName(item.name));
+    }
+  }
+  return set;
+}
+
 export class TrackerDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     this.counts = null;
+    this.catalog = null;
+    this.catalogAt = 0;
+    this.catalogStale = false;
   }
 
   async load() {
@@ -367,13 +423,50 @@ export class TrackerDO {
   }
 
   async getConfig() {
-    const [webhook, mode, messageId, apiSecret] = await Promise.all([
+    const [webhook, mode, messageId, apiSecret, lastError] = await Promise.all([
       this.state.storage.get('cfg:webhook'),
       this.state.storage.get('cfg:mode'),
       this.state.storage.get('cfg:messageId'),
       this.state.storage.get('cfg:apiSecret'),
+      this.state.storage.get('cfg:lastError'),
     ]);
-    return { webhook, mode: mode || 'long', messageId, apiSecret };
+    return { webhook, mode: mode || 'long', messageId, apiSecret, lastError };
+  }
+
+  // Catalog is cached in memory + storage with a TTL. Re-fetches from GitHub
+  // when the TTL expires so new games are picked up automatically. Falls back
+  // to the cached copy (marked stale) when GitHub is unreachable.
+  async getCatalog() {
+    const now = Date.now();
+    if (this.catalog && now - this.catalogAt < CATALOG_TTL_MS) {
+      return { catalog: this.catalog, stale: this.catalogStale };
+    }
+    const fresh = await fetchGameCatalog(this.env);
+    if (fresh) {
+      this.catalog = fresh;
+      this.catalogAt = now;
+      this.catalogStale = false;
+      await this.state.storage.put('cfg:catalog', [...fresh]);
+      await this.state.storage.put('cfg:catalogAt', now);
+      return { catalog: fresh, stale: false };
+    }
+    const cached = await this.state.storage.get('cfg:catalog');
+    if (cached) {
+      const cachedAt = (await this.state.storage.get('cfg:catalogAt')) || 0;
+      this.catalog = new Set(cached);
+      this.catalogAt = cachedAt;
+      this.catalogStale = true;
+      return { catalog: this.catalog, stale: true };
+    }
+    return { catalog: null, stale: false };
+  }
+
+  async catalogStatus() {
+    const { catalog, stale } = await this.getCatalog();
+    const at = await this.state.storage.get('cfg:catalogAt');
+    const when = at ? new Date(at).toLocaleString('en-US') : 'never';
+    if (!catalog) return `Folder list unavailable (last: ${when})`;
+    return `${catalog.size} games in folder (updated ${when}${stale ? ', using cache' : ''})`;
   }
 
   async ensureAlarm() {
@@ -398,12 +491,16 @@ export class TrackerDO {
 
   async stats() {
     await this.load();
-    const games = sortedGames(this.counts).map(([name, count]) => ({ name, count }));
+    const { catalog, stale } = await this.getCatalog();
+    const active = filterActiveGames(this.counts, catalog);
+    const games = active.map(([name, count]) => ({ name, count }));
     return {
       status: 200,
       json: {
-        total: computeTotal(this.counts),
-        gamesCount: this.counts.size,
+        total: computeTotal(active),
+        gamesCount: games.length,
+        trackedGames: catalog ? catalog.size : null,
+        catalogStale: stale,
         games,
         updatedAt: new Date().toISOString(),
       },
@@ -426,14 +523,22 @@ export class TrackerDO {
 
   async refreshDiscord() {
     await this.load();
+    const { catalog } = await this.getCatalog();
     const cfg = await this.getConfig();
     if (!cfg.webhook) return;
     const wh = webhookFromUrl(cfg.webhook);
     if (!wh) return;
-    const payload = cfg.mode === 'master' ? buildMasterMessage(this.counts) : buildLongMessage(this.counts);
+    const active = filterActiveGames(this.counts, catalog);
+    const total = computeTotal(active);
+    const payload = cfg.mode === 'master' ? buildMasterMessage(active, total) : buildLongMessage(active, total);
     const r = await this.pushToDiscord(wh, payload, cfg.messageId);
     if (r.messageId && r.messageId !== cfg.messageId) {
       await this.state.storage.put('cfg:messageId', r.messageId);
+    }
+    if (!r.ok && r.error) {
+      await this.state.storage.put('cfg:lastError', `${r.error} @ ${new Date().toISOString()}`);
+    } else if (r.ok) {
+      await this.state.storage.delete('cfg:lastError');
     }
   }
 
@@ -449,6 +554,8 @@ export class TrackerDO {
         setupComplete: !!cfg.apiSecret,
         apiSecret: cfg.apiSecret || '',
         reportUrl: cfg.apiSecret ? `${origin}/api/report` : '',
+        catalogStatus: await this.catalogStatus(),
+        lastError: cfg.lastError || '',
       },
     };
   }
@@ -472,22 +579,30 @@ export class TrackerDO {
     }
 
     await this.load();
+    await this.getCatalog(); // warm the catalog so the first message is accurate
     await this.state.storage.put('cfg:webhook', webhook);
     await this.state.storage.put('cfg:mode', mode);
     await this.state.storage.put('cfg:apiSecret', apiSecret);
-    await this.state.storage.delete('cfg:messageId');
+    // Reuse the existing message instead of creating a duplicate on every save.
+    if (body.webhook && body.webhook.trim()) {
+      await this.state.storage.delete('cfg:messageId');
+    }
     await this.ensureAlarm();
 
     const wh = webhookFromUrl(webhook);
-    const payload = mode === 'master' ? buildMasterMessage(this.counts) : buildLongMessage(this.counts);
-    const created = await createDiscordMessage(wh, payload);
-    if (!created.id) {
+    const active = filterActiveGames(this.counts, this.catalog);
+    const total = computeTotal(active);
+    const payload = mode === 'master' ? buildMasterMessage(active, total) : buildLongMessage(active, total);
+    const r = await this.pushToDiscord(wh, payload, cfg.messageId);
+    if (!r.ok) {
+      await this.state.storage.put('cfg:lastError', `${r.error} @ ${new Date().toISOString()}`);
       return {
         status: 400,
-        json: { error: 'Could not send to Discord. Check the webhook URL and channel permissions. (' + (created.error || 'unknown') + ')' },
+        json: { error: 'Could not send to Discord. Check the webhook URL and channel permissions. (' + (r.error || 'unknown') + ')' },
       };
     }
-    await this.state.storage.put('cfg:messageId', created.id);
+    if (r.messageId) await this.state.storage.put('cfg:messageId', r.messageId);
+    await this.state.storage.delete('cfg:lastError');
 
     return {
       status: 200,
@@ -495,6 +610,7 @@ export class TrackerDO {
         reportUrl: `${origin}/api/report`,
         apiSecret,
         mode,
+        catalogStatus: await this.catalogStatus(),
       },
     };
   }
@@ -527,6 +643,12 @@ export class TrackerDO {
       return json(result.status, result.json);
     }
 
+    if (path === '/api/catalog' && request.method === 'GET') {
+      await this.getCatalog();
+      const s = await this.catalogStatus();
+      return json(200, { status: s });
+    }
+
     if (path === '/api/settings') {
       const password = request.headers.get('X-Admin-Password') || '';
       if (request.method === 'GET') {
@@ -548,6 +670,8 @@ export class TrackerDO {
     try {
       await this.refreshDiscord();
     } catch (e) {
+      // Store the error so it is visible in /settings instead of being silently lost.
+      await this.state.storage.put('cfg:lastError', `alarm: ${String(e)} @ ${new Date().toISOString()}`);
     } finally {
       await this.state.storage.setAlarm(Date.now() + REFRESH_INTERVAL_MS);
     }

@@ -6,23 +6,34 @@ anyone running your script.
 
 ## What it does
 
+- **Monitors the Ouroboros games folder** on GitHub
+  (`joustingmatch/Ouroboros/games`). The worker fetches the live folder listing
+  every 30 minutes, so new folder files pass the display filter automatically
+  once a loader reports them — no worker redeploy needed.
+- **Only shows games that currently have executions.** A game with zero runs is
+  never listed on Discord. A game stops appearing only if it is removed from
+  the Ouroboros folder or its count is reset.
 - Loaders POST to an API endpoint (not a raw webhook). The webhook URL stays
   hidden inside Cloudflare.
-- A Discord message auto-refreshes every 10 seconds with every game's count
-  and the grand total (e.g. Grow A Garden 2 = 10k + Steal An Egg = 30k = 40k).
+- A Discord message auto-refreshes every 10 seconds with every active game's
+  count and the grand total (e.g. Grow A Garden 2 = 10k + Steal An Egg = 30k
+  = 40k).
 - New games are added automatically the first time they are reported.
-- No caching anywhere — counts are always read fresh from Cloudflare storage.
+- No caching of counts — counts are always read fresh from Cloudflare storage.
 - Two display modes, chosen at setup:
-  - **Long** — lists every game with its count plus the total. Up to 250 games.
+  - **Long** — lists every active game with its count plus the total. Up to 250 games.
   - **Master** — one big grand-total number. Best for 200+ games.
-- **Custom-generated icons** — the Discord message uses two icons I generated
+- **Custom-generated icons** — the Discord message uses two icons
   (a bar-chart icon on the title section and a trophy icon on the top-game
   section), committed to the repo as `emoji_icon.png` and `emoji_top.png`.
-  No standard Unicode emoji are used.
-- **Discord Components v2** — the Discord message is built with the new
+- **Discord Components v2** — the Discord message is built with the
   Components v2 layout (Container + Section + TextDisplay + Thumbnail), so it
   renders as one clean, auto-updating component block that refreshes every 10
-  seconds.
+  seconds. Mentions are fully disabled so game names can never ping anyone.
+
+> Optional: set a `GITHUB_TOKEN` secret (`npx wrangler secret put GITHUB_TOKEN`)
+> to raise the GitHub API rate limit. Without it the worker uses the
+> unauthenticated limit, which is plenty for a 30-minute refresh cycle.
 
 ## Requirements
 
@@ -149,7 +160,8 @@ request for batching.
 | GET | `/` | none | Live dashboard, refreshes every 10s |
 | GET | `/settings` | admin password | Configure webhook and mode |
 | POST | `/api/report` | API secret | Loader reports an execution |
-| GET | `/api/stats` | none | JSON stats for the dashboard |
+| GET | `/api/stats` | none | JSON stats for the dashboard (active games only) |
+| GET | `/api/catalog` | none | Folder-monitor status |
 | GET | `/api/settings` | admin password | Read current config and secret |
 | POST | `/api/settings` | admin password | Save webhook URL and mode |
 
@@ -187,14 +199,36 @@ you outgrow that, the Workers Paid plan is $5/month and removes the caps.
 - **Discord message not updating** — check the webhook URL and that the channel
   still exists. Re-save settings to recreate the message.
 - **Counts not increasing** — a 401 means the secret is wrong; a 400 means the
-  game name is missing or invalid.
+  game name is missing or invalid. A game that reports but never appears on
+  Discord is not in the Ouroboros `games/` folder; check `/api/catalog`.
+- **"using cache" on the dashboard** — GitHub was unreachable when the folder
+  listing last refreshed; the worker is using the cached copy. It will retry
+  on the next 30-minute cycle.
 - **`wrangler deploy` fails on migrations** — the first deploy needs the
   `[[migrations]]` block with `new_sqlite_classes` (already included). Keep it.
 
-## Notes on "Component v2"
+## How games are filtered
 
-This project uses auto-updating Discord embeds — the standard, reliable way
-for a webhook to show rich, self-refreshing content. Discord's bot-only
-"Components v2" container system is not available to plain webhooks, so embeds
-are used instead. The result is the same: one message that updates every 10
-seconds with all games and the grand total.
+The Discord message and dashboard list a game only when **both** are true:
+
+1. The game exists as a file in the Ouroboros `games/` folder (`.lua`, `.lu`, or
+   an extensionless game file).
+2. The game has at least one reported execution.
+
+Game names are derived from the file name the same way on both sides
+(`grow-a-garden-2.lua` becomes `Grow A Garden 2`; `slapacumslut` becomes
+`Slapacumslut`), so the loader and the worker always agree. If GitHub is
+unreachable, the worker falls back to the last known folder listing (shown as
+"using cache" on the dashboard) and retries on the next 30-minute cycle.
+
+> Note: the worker catalog auto-discovers new folder files, but a game only
+> gets an execution once a loader reports it. The loader still needs a
+> `CreatorId → file` mapping for each game; see `loader.lua`.
+
+## Notes on Components v2
+
+This project sends Discord Components v2 payloads (the `IS_COMPONENTS_V2`
+flag, `Container`, `Section`, `TextDisplay`, `Thumbnail` components) to the
+webhook, with `allowed_mentions` set to parse nothing. If a future Discord
+change rejects the v2 layout, the `pushToDiscord` path will surface the error
+in `/settings` ("Last Discord error") instead of failing silently.

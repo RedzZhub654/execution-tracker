@@ -46,7 +46,7 @@ local games = {
     [5028964]    = 'saber-simulator.lua',
     [561990553]  = 'survive-zombie-arena.lua',
     [35906875]   = 'anime-story-2.lua',
-    [33910482]   = 'anime-world-fighters.lua',
+    [33910482]   = 'anime-world-fighters.lua', -- CONFLICT: 33910482 is also mapped to anime-astral-simulator.lua below (last wins) — resolve if wrong
     [895955624]  = 'anime-rng.lua',
     [33910482]   = 'anime-astral-simulator.lua',
     [1006239440] = 'anime-battle-rng.lua',
@@ -89,10 +89,9 @@ local games = {
     [35666413]   = 'beeremasters.lua',
     [532484073]  = 'mydinofarm.lua',
     [9640154]    = 'storagehunters.lua',
-    [650517328]  = 'rollananime.lua',
     [8309807]    = 'scratchyloot.lua',
     [33290695]   = 'bethefinalboss.lu',
-    [540612760]  = 'buildabaseandsteal',
+    [540612760]  = 'buildabaseandsteal', -- NOTE: no .lua extension and not in folder — may 404
     [657759819]  = 'rollanimetofight.lua',
     [35929511]   = 'animeexpeditions.lua',
     [383912360]  = 'zombieturretfarm.lua',
@@ -107,13 +106,12 @@ local games = {
     [286242120]  = 'lootup.lua',
     [490911723]  = 'swingerspickaxe.lua',
     [1056817463] = 'bidforanime.lua',
-    [645675002]  = 'pullaluckyfish.lua',
     [10627495]   = 'somethingsexywillhappen.lua',
     [4843918]    = 'farmafish.lua',
     [1057255034] = 'cutagem.lua',
     [15753989]   = 'catchaslop.lua',
     [140965829]  = 'buildapetfactory.lua',
-    [35861864]   = 'roll2survive',
+    [35861864]   = 'roll2survive',        -- NOTE: no .lua extension and not in folder — may 404
     [5003223]    = 'slapacumslut',
     [14685986]   = 'capybarasvsplants.lua',
     [492855504]  = 'crawfishing.lua',
@@ -173,7 +171,7 @@ local games = {
     [949197661]  = 'automateares.lua',
     [200275059]  = 'buildorefarm.lua',
     [943932821]  = 'poopanorefarm.lua',
-    [854390513]  = 'jumptostealslime.lua',
+    [854390513]  = 'jumptostealslime.lua', -- CONFLICT: 854390513 is also mapped to jumptostealsoccer.lua below (last wins) — resolve if wrong
     [103466300]  = 'shrinkperstep.lua',
     [519201492]  = 'heightperjump.lua',
     [35850353]   = 'mergeplantsvsmobs.lua',
@@ -196,17 +194,23 @@ local games = {
     [1097982922] = 'kittenkeyboardescape.lua',
     [852706731] = 'rollasuperhero.lua',
     [1030691482] = 'beanstalksquishy.lua',
-    [650517328] = 'rollanimedice.lua',
+    [650517328] = 'rollananime.lua', -- CONFLICT: 650517328 is also mapped to rollanimedice.lua below (last wins) — resolve if wrong
     [308858726] = 'buildagunarmy.lua',
     [459291258] = 'cleanleaves.lua',
     [232837303] = 'screamperclick.lua',
     [312122244] = 'SpinjitsuEscape.lua',
     [4127076] = 'catchntame.lua',
+    [650517328] = 'rollanimedice.lua',
 }
 
 local file = games[game.CreatorId]
 if file then
     task.wait(math.random())
     reportExecution(cleanName(file))
-    loadstring(game:HttpGet(BASE .. file))()
+    -- Guard the load: if the file 404s or fails to compile, don't crash the loader.
+    local ok, content = pcall(function() return game:HttpGet(BASE .. file) end)
+    if ok and type(content) == 'string' and #content > 0 then
+        local fn = loadstring(content)
+        if fn then fn() end
+    end
 end
