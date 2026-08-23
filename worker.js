@@ -236,6 +236,12 @@ $('save').onclick=async()=>{
 </body>
 </html>`;
 
+// Normalize for matching: lowercase, alphanumeric only. So "Grow A Garden 2",
+// "grow a garden 2", and "🌱 Grow a Garden 2" all match the same folder game.
+function normalizeForMatch(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function sanitizeGameName(raw) {
   if (typeof raw !== 'string') return '';
   let s = raw.replace(/[\r\n\t]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').trim();
@@ -265,7 +271,7 @@ function sortedGames(countsMap) {
 function filterActiveGames(countsMap, catalog) {
   const games = sortedGames(countsMap);
   if (!catalog) return games;
-  return games.filter(([name]) => catalog.has(name));
+  return games.filter(([name]) => catalog.has(normalizeForMatch(name)));
 }
 
 function computeTotal(games) {
@@ -397,7 +403,7 @@ async function fetchGameCatalog(env) {
     // Include .lua/.lu files AND extensionless game files (e.g. 'slapacumslut',
     // 'buildabaseandsteal'). Skip files with any other extension.
     if (item && item.type === 'file' && (/\.(lua|lu)$/i.test(item.name) || !item.name.includes('.'))) {
-      set.add(normalizeFileName(item.name));
+      set.add(normalizeForMatch(normalizeFileName(item.name)));
     }
   }
   return set;

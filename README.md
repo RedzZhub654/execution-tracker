@@ -91,45 +91,46 @@ message is created immediately and refreshes every 10 seconds from then on.
 
 ## Use it in your loader
 
-Call the API endpoint whenever a player runs your script. Send the game name
-and your secret — each call adds one execution for that game. The name
-`Grow A Garden 2` below is only an example; replace it with the real name of
-your game or script. The first time a name is reported, it is added to the
-list automatically.
-
-If your loader already maps each game to a file name (like the Ouroboros loader
-at `https://github.com/joustingmatch/Ouroboros`), you do **not** need to type
-game names at all — use the file name as the game name. An example `loader.lua`
-is included in this repo that does this automatically: it cleans each file name
-(e.g. `grow-a-garden-2.lua` becomes `Grow A Garden 2`) and reports it before
-the game loads. Just set `TRACKER_URL` and `TRACKER_SECRET` at the top of that
-file and replace the friend's current loader with it.
+You do **not** need to type any game names. The snippet below auto-detects the
+running game's name from Roblox itself, so the same code works across every
+game without changes. The worker matches names flexibly (case, spaces, and
+emojis are ignored), so `Grow A Garden 2`, `grow a garden 2`, and
+`🌱 Grow a Garden 2` all count as the same game.
 
 Roblox Lua (put this near the top of your script):
 
 ```lua
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 -- Replace these two values with your own:
 local URL = "https://execution-tracker.YOUR-SUBDOMAIN.workers.dev/api/report"
 local SECRET = "YOUR-SECRET-TOKEN"   -- from the /settings page
 
--- Call this with the game's name every time a player runs your script.
-local function reportExecution(gameName)
-    local q = "?game=" .. HttpService:UrlEncode(gameName) .. "&secret=" .. SECRET
+-- Auto-detect the game name. You never type game names.
+local function reportExecution()
+    local name = game.Name
+    local ok, info = pcall(function()
+        return MarketplaceService:GetProductInfo(game.PlaceId)
+    end)
+    if ok and info and info.Name then name = info.Name end
+    local q = "?game=" .. HttpService:UrlEncode(name) .. "&secret=" .. SECRET
     pcall(function()
         HttpService:PostAsync(URL .. q, "")
     end)
 end
 
--- Example: a player ran your script for the game "Grow A Garden 2".
-reportExecution("Grow A Garden 2")
+-- Call once when a player runs your script.
+reportExecution()
 ```
 
-So if you have three games, you'd call `reportExecution("Game One")`,
-`reportExecution("Game Two")`, and `reportExecution("Game Three")` from each
-game's loader. Always use the same name for the same game so its counts add up
-together.
+If your loader already maps each game to a file name (like the Ouroboros loader
+at `https://github.com/joustingmatch/Ouroboros`), you do **not** need to detect
+names at all — use the file name as the game name. An example `loader.lua`
+is included in this repo that does this automatically: it cleans each file name
+(e.g. `grow-a-garden-2.lua` becomes `Grow A Garden 2`) and reports it before
+the game loads. Just set `TRACKER_URL` and `TRACKER_SECRET` at the top of that
+file and replace your current loader with it.
 
 JavaScript:
 
