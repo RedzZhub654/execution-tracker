@@ -10,9 +10,12 @@ const MAX_LONG_GAMES = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_MSG; // 250
 const MAX_GAME_NAME_LEN = 80;
 const MAX_INCREMENT_PER_REQUEST = 1000;
 
-// Default emoji set, written to storage on first use and read back at runtime.
-// Encoded as Unicode escapes so the source file contains no emoji glyphs.
-const DEFAULT_EMOJIS = { icon: '\u{1F4CA}', top: '\u{1F3C6}' };
+// Custom-generated icon images, committed to the repo and served by GitHub raw.
+// Used as the embed thumbnail and footer icon instead of standard emoji.
+const EMOJI = {
+  icon: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_icon.png',
+  top: 'https://raw.githubusercontent.com/RedzZhub654/execution-tracker/main/emoji_top.png',
+};
 
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
@@ -245,53 +248,51 @@ function computeTotal(countsMap) {
   return t;
 }
 
-function titleWithIcon(emojis) {
-  return emojis && emojis.icon ? emojis.icon + ' Execution Tracker' : 'Execution Tracker';
-}
-
-function buildMasterEmbeds(countsMap, emojis) {
+function buildMasterEmbeds(countsMap) {
   const total = computeTotal(countsMap);
   const gamesCount = countsMap.size;
   return [{
-    title: titleWithIcon(emojis),
+    title: 'Execution Tracker',
     description: `### Total Executions\n# ${formatNum(total)}`,
     color: 0x34d399,
+    thumbnail: { url: EMOJI.icon },
     timestamp: new Date().toISOString(),
-    footer: { text: `${gamesCount} game${gamesCount === 1 ? '' : 's'} tracked · auto-refresh 10s` },
+    footer: { icon_url: EMOJI.top, text: `${gamesCount} game${gamesCount === 1 ? '' : 's'} tracked · auto-refresh 10s` },
   }];
 }
 
-function buildLongEmbeds(countsMap, emojis) {
+function buildLongEmbeds(countsMap) {
   const games = sortedGames(countsMap);
   const total = computeTotal(countsMap);
   const capped = games.slice(0, MAX_LONG_GAMES);
-  const topIcon = emojis && emojis.top ? emojis.top + ' ' : '';
   const embeds = [];
   for (let i = 0; i < capped.length; i += MAX_FIELDS_PER_EMBED) {
     const chunk = capped.slice(i, i + MAX_FIELDS_PER_EMBED);
-    const fields = chunk.map(([name, count], idx) => ({
-      name: (i === 0 && idx === 0 ? topIcon : '') + name.slice(0, MAX_GAME_NAME_LEN),
+    const fields = chunk.map(([name, count]) => ({
+      name: name.slice(0, MAX_GAME_NAME_LEN),
       value: formatNum(count),
       inline: true,
     }));
     const embed = { color: 0x8b5cf6, fields };
     if (i === 0) {
-      embed.title = titleWithIcon(emojis);
+      embed.title = 'Execution Tracker';
+      embed.thumbnail = { url: EMOJI.icon };
       embed.description = `**Total Executions:** ${formatNum(total)}${games.length > capped.length ? ` (+${games.length - capped.length} more)` : ''}`;
       embed.timestamp = new Date().toISOString();
     }
     if (i + MAX_FIELDS_PER_EMBED >= capped.length) {
-      embed.footer = { text: `${games.length} games · auto-refresh 10s` };
+      embed.footer = { icon_url: EMOJI.top, text: `${games.length} games · auto-refresh 10s` };
     }
     embeds.push(embed);
   }
   if (embeds.length === 0) {
     embeds.push({
-      title: titleWithIcon(emojis),
+      title: 'Execution Tracker',
+      thumbnail: { url: EMOJI.icon },
       description: `**Total Executions:** 0`,
       color: 0x8b5cf6,
       timestamp: new Date().toISOString(),
-      footer: { text: 'auto-refresh 10s' },
+      footer: { icon_url: EMOJI.top, text: 'auto-refresh 10s' },
     });
   }
   return embeds;
@@ -344,19 +345,13 @@ export class TrackerDO {
   }
 
   async getConfig() {
-    const [webhook, mode, messageId, apiSecret, emojis] = await Promise.all([
+    const [webhook, mode, messageId, apiSecret] = await Promise.all([
       this.state.storage.get('cfg:webhook'),
       this.state.storage.get('cfg:mode'),
       this.state.storage.get('cfg:messageId'),
       this.state.storage.get('cfg:apiSecret'),
-      this.state.storage.get('cfg:emojis'),
     ]);
-    const cfg = { webhook, mode: mode || 'long', messageId, apiSecret, emojis };
-    if (!emojis) {
-      cfg.emojis = { ...DEFAULT_EMOJIS };
-      await this.state.storage.put('cfg:emojis', cfg.emojis);
-    }
-    return cfg;
+    return { webhook, mode: mode || 'long', messageId, apiSecret };
   }
 
   async ensureAlarm() {
@@ -413,7 +408,7 @@ export class TrackerDO {
     if (!cfg.webhook) return;
     const wh = webhookFromUrl(cfg.webhook);
     if (!wh) return;
-    const embeds = cfg.mode === 'master' ? buildMasterEmbeds(this.counts, cfg.emojis) : buildLongEmbeds(this.counts, cfg.emojis);
+    const embeds = cfg.mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
     const r = await this.pushToDiscord(wh, embeds, cfg.messageId);
     if (r.messageId && r.messageId !== cfg.messageId) {
       await this.state.storage.put('cfg:messageId', r.messageId);
@@ -462,7 +457,7 @@ export class TrackerDO {
     await this.ensureAlarm();
 
     const wh = webhookFromUrl(webhook);
-    const embeds = mode === 'master' ? buildMasterEmbeds(this.counts, cfg.emojis) : buildLongEmbeds(this.counts, cfg.emojis);
+    const embeds = mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
     const created = await createDiscordMessage(wh, embeds);
     if (!created.id) {
       return {

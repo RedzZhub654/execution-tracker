@@ -15,6 +15,9 @@ anyone running your script.
 - Two display modes, chosen at setup:
   - **Long** — lists every game with its count plus the total. Up to 250 games.
   - **Master** — one big grand-total number. Best for 200+ games.
+- **Custom-generated icons** — the Discord message uses two icons I generated
+  (a bar-chart thumbnail and a trophy footer icon), committed to the repo as
+  `emoji_icon.png` and `emoji_top.png`. No standard Unicode emoji are used.
 
 ## Requirements
 
@@ -148,6 +151,7 @@ you outgrow that, the Workers Paid plan is $5/month and removes the caps.
 
 - `worker.js` — the whole app: Worker, Durable Object, dashboard, settings page.
 - `wrangler.toml` — Cloudflare config.
+- `emoji_icon.png`, `emoji_top.png` — custom icons used in the Discord message.
 - `README.md` — this file.
 
 ## Troubleshooting
