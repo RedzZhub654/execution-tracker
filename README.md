@@ -80,16 +80,22 @@ message is created immediately and refreshes every 10 seconds from then on.
 
 ## Use it in your loader
 
-Call the API endpoint with the game name and your secret. Each call adds one
-execution for that game.
+Call the API endpoint whenever a player runs your script. Send the game name
+and your secret — each call adds one execution for that game. The name
+`Grow A Garden 2` below is only an example; replace it with the real name of
+your game or script. The first time a name is reported, it is added to the
+list automatically.
 
-Roblox Lua:
+Roblox Lua (put this near the top of your script):
 
 ```lua
 local HttpService = game:GetService("HttpService")
-local URL = "https://execution-tracker.<your-subdomain>.workers.dev/api/report"
-local SECRET = "paste-your-secret-token-here"
 
+-- Replace these two values with your own:
+local URL = "https://execution-tracker.YOUR-SUBDOMAIN.workers.dev/api/report"
+local SECRET = "YOUR-SECRET-TOKEN"   -- from the /settings page
+
+-- Call this with the game's name every time a player runs your script.
 local function reportExecution(gameName)
     local q = "?game=" .. HttpService:UrlEncode(gameName) .. "&secret=" .. SECRET
     pcall(function()
@@ -97,14 +103,20 @@ local function reportExecution(gameName)
     end)
 end
 
+-- Example: a player ran your script for the game "Grow A Garden 2".
 reportExecution("Grow A Garden 2")
 ```
+
+So if you have three games, you'd call `reportExecution("Game One")`,
+`reportExecution("Game Two")`, and `reportExecution("Game Three")` from each
+game's loader. Always use the same name for the same game so its counts add up
+together.
 
 JavaScript:
 
 ```js
-const URL = "https://execution-tracker.<your-subdomain>.workers.dev/api/report";
-const SECRET = "paste-your-secret-token-here";
+const URL = "https://execution-tracker.YOUR-SUBDOMAIN.workers.dev/api/report";
+const SECRET = "YOUR-SECRET-TOKEN";
 
 await fetch(`${URL}?game=${encodeURIComponent("Grow A Garden 2")}&secret=${SECRET}`, {
   method: "POST",
@@ -115,7 +127,7 @@ Plain HTTP (any language):
 
 ```
 POST /api/report?game=Grow%20A%20Garden%202&secret=YOURSECRET
-Host: execution-tracker.<your-subdomain>.workers.dev
+Host: execution-tracker.YOUR-SUBDOMAIN.workers.dev
 ```
 
 The endpoint also accepts JSON (`{"game":"NAME","secret":"SECRET"}`) and
