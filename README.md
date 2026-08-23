@@ -16,8 +16,13 @@ anyone running your script.
   - **Long** — lists every game with its count plus the total. Up to 250 games.
   - **Master** — one big grand-total number. Best for 200+ games.
 - **Custom-generated icons** — the Discord message uses two icons I generated
-  (a bar-chart thumbnail and a trophy footer icon), committed to the repo as
-  `emoji_icon.png` and `emoji_top.png`. No standard Unicode emoji are used.
+  (a bar-chart icon on the title section and a trophy icon on the top-game
+  section), committed to the repo as `emoji_icon.png` and `emoji_top.png`.
+  No standard Unicode emoji are used.
+- **Discord Components v2** — the Discord message is built with the new
+  Components v2 layout (Container + Section + TextDisplay + Thumbnail), so it
+  renders as one clean, auto-updating component block that refreshes every 10
+  seconds.
 
 ## Requirements
 

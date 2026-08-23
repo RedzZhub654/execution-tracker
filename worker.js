@@ -248,54 +248,88 @@ function computeTotal(countsMap) {
   return t;
 }
 
-function buildMasterEmbeds(countsMap) {
-  const total = computeTotal(countsMap);
-  const gamesCount = countsMap.size;
-  return [{
-    title: 'Execution Tracker',
-    description: `### Total Executions\n# ${formatNum(total)}`,
-    color: 0x34d399,
-    thumbnail: { url: EMOJI.icon },
-    timestamp: new Date().toISOString(),
-    footer: { icon_url: EMOJI.top, text: `${gamesCount} game${gamesCount === 1 ? '' : 's'} tracked · auto-refresh 10s` },
-  }];
+const TEXT_DISPLAY_MAX = 2000;
+const CONTAINER_MAX = 10;
+
+// Split game lines into TextDisplay-sized chunks (each <= TEXT_DISPLAY_MAX chars).
+function chunkGameLines(games) {
+  const chunks = [];
+  let cur = '';
+  for (const [name, count] of games) {
+    const line = `**${name.slice(0, MAX_GAME_NAME_LEN)}** \u2014 ${formatNum(count)}\n`;
+    if ((cur + line).length > TEXT_DISPLAY_MAX) {
+      if (cur) chunks.push(cur);
+      cur = line;
+    } else {
+      cur += line;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : ['No games tracked yet.'];
 }
 
-function buildLongEmbeds(countsMap) {
+// Components v2 message: one container with a title section (bar-chart icon)
+// and the grand total. Master mode = total only.
+function buildMasterMessage(countsMap) {
+  const total = computeTotal(countsMap);
+  return {
+    flags: 32768,
+    username: 'Execution Tracker',
+    components: [
+      {
+        type: 17,
+        accent_color: 0x34d399,
+        components: [
+          {
+            type: 9,
+            components: [
+              { type: 10, content: '## Execution Tracker' },
+              { type: 10, content: `### Total Executions\n# ${formatNum(total)}` },
+            ],
+            accessory: { type: 11, media: { url: EMOJI.icon } },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+// Components v2 message: title section (bar-chart icon) + top-game section
+// (trophy icon) + the full game list as chunked TextDisplays.
+function buildLongMessage(countsMap) {
   const games = sortedGames(countsMap);
   const total = computeTotal(countsMap);
-  const capped = games.slice(0, MAX_LONG_GAMES);
-  const embeds = [];
-  for (let i = 0; i < capped.length; i += MAX_FIELDS_PER_EMBED) {
-    const chunk = capped.slice(i, i + MAX_FIELDS_PER_EMBED);
-    const fields = chunk.map(([name, count]) => ({
-      name: name.slice(0, MAX_GAME_NAME_LEN),
-      value: formatNum(count),
-      inline: true,
-    }));
-    const embed = { color: 0x8b5cf6, fields };
-    if (i === 0) {
-      embed.title = 'Execution Tracker';
-      embed.thumbnail = { url: EMOJI.icon };
-      embed.description = `**Total Executions:** ${formatNum(total)}${games.length > capped.length ? ` (+${games.length - capped.length} more)` : ''}`;
-      embed.timestamp = new Date().toISOString();
-    }
-    if (i + MAX_FIELDS_PER_EMBED >= capped.length) {
-      embed.footer = { icon_url: EMOJI.top, text: `${games.length} games · auto-refresh 10s` };
-    }
-    embeds.push(embed);
-  }
-  if (embeds.length === 0) {
-    embeds.push({
-      title: 'Execution Tracker',
-      thumbnail: { url: EMOJI.icon },
-      description: `**Total Executions:** 0`,
-      color: 0x8b5cf6,
-      timestamp: new Date().toISOString(),
-      footer: { icon_url: EMOJI.top, text: 'auto-refresh 10s' },
+
+  const header = {
+    type: 9,
+    components: [
+      { type: 10, content: '## Execution Tracker' },
+      { type: 10, content: `**Total Executions:** ${formatNum(total)}` },
+    ],
+    accessory: { type: 11, media: { url: EMOJI.icon } },
+  };
+  const children = [header, { type: 14, divider: true, spacing: 1 }];
+
+  if (games.length) {
+    children.push({
+      type: 9,
+      components: [
+        { type: 10, content: '### Top Game' },
+        { type: 10, content: `**${games[0][0].slice(0, MAX_GAME_NAME_LEN)}** \u2014 ${formatNum(games[0][1])}` },
+      ],
+      accessory: { type: 11, media: { url: EMOJI.top } },
     });
+    children.push({ type: 14, divider: true, spacing: 1 });
+    for (const c of chunkGameLines(games.slice(1))) {
+      children.push({ type: 10, content: c });
+    }
   }
-  return embeds;
+
+  const containers = [];
+  for (let i = 0; i < children.length; i += CONTAINER_MAX) {
+    containers.push({ type: 17, accent_color: 0x8b5cf6, components: children.slice(i, i + CONTAINER_MAX) });
+  }
+  return { flags: 32768, username: 'Execution Tracker', components: containers };
 }
 
 function webhookFromUrl(url) {
@@ -304,11 +338,11 @@ function webhookFromUrl(url) {
   return { id: m[1], token: m[2], base: url.trim().replace(/\/$/, '') };
 }
 
-async function createDiscordMessage(wh, embeds) {
+async function createDiscordMessage(wh, payload) {
   const res = await fetch(`${wh.base}?wait=true`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ embeds, username: 'Execution Tracker' }),
+    body: JSON.stringify(payload),
   });
   if (res.status === 429) return { error: 'rate_limited' };
   if (!res.ok) return { error: `create_${res.status}` };
@@ -316,11 +350,11 @@ async function createDiscordMessage(wh, embeds) {
   return { id: data.id };
 }
 
-async function editDiscordMessage(wh, messageId, embeds) {
+async function editDiscordMessage(wh, messageId, payload) {
   const res = await fetch(`${wh.base}/messages/${messageId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ embeds, username: 'Execution Tracker' }),
+    body: JSON.stringify(payload),
   });
   if (res.status === 404 || res.status === 401) return { error: 'message_gone' };
   if (res.status === 429) return { error: 'rate_limited' };
@@ -388,17 +422,17 @@ export class TrackerDO {
     };
   }
 
-  async pushToDiscord(wh, embeds, messageId) {
+  async pushToDiscord(wh, payload, messageId) {
     if (messageId) {
-      const r = await editDiscordMessage(wh, messageId, embeds);
+      const r = await editDiscordMessage(wh, messageId, payload);
       if (r.error === 'message_gone') {
-        const c = await createDiscordMessage(wh, embeds);
+        const c = await createDiscordMessage(wh, payload);
         return c.id ? { ok: true, messageId: c.id } : { ok: false, error: c.error };
       }
       if (r.error) return { ok: false, error: r.error };
       return { ok: true, messageId };
     }
-    const c = await createDiscordMessage(wh, embeds);
+    const c = await createDiscordMessage(wh, payload);
     return c.id ? { ok: true, messageId: c.id } : { ok: false, error: c.error };
   }
 
@@ -408,8 +442,8 @@ export class TrackerDO {
     if (!cfg.webhook) return;
     const wh = webhookFromUrl(cfg.webhook);
     if (!wh) return;
-    const embeds = cfg.mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
-    const r = await this.pushToDiscord(wh, embeds, cfg.messageId);
+    const payload = cfg.mode === 'master' ? buildMasterMessage(this.counts) : buildLongMessage(this.counts);
+    const r = await this.pushToDiscord(wh, payload, cfg.messageId);
     if (r.messageId && r.messageId !== cfg.messageId) {
       await this.state.storage.put('cfg:messageId', r.messageId);
     }
@@ -457,8 +491,8 @@ export class TrackerDO {
     await this.ensureAlarm();
 
     const wh = webhookFromUrl(webhook);
-    const embeds = mode === 'master' ? buildMasterEmbeds(this.counts) : buildLongEmbeds(this.counts);
-    const created = await createDiscordMessage(wh, embeds);
+    const payload = mode === 'master' ? buildMasterMessage(this.counts) : buildLongMessage(this.counts);
+    const created = await createDiscordMessage(wh, payload);
     if (!created.id) {
       return {
         status: 400,
