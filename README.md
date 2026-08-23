@@ -6,12 +6,12 @@ anyone running your script.
 
 ## What it does
 
-- **Monitors the Ouroboros games folder** on GitHub
-  (`joustingmatch/Ouroboros/games`). The worker fetches the live folder listing
-  every 30 minutes, so new folder files are resolved automatically once a
-  loader reports them — no worker redeploy needed. A bundled snapshot of the
-  folder ships with the worker as a fallback if the GitHub API is
-  rate-limited or down, so script loading keeps working either way.
+- **Reads the Ouroboros games folder live** from GitHub
+  (`joustingmatch/Ouroboros/games`) — no hardcoded game list anywhere. The worker
+  fetches the folder listing every 30 minutes, so new games are resolved
+  automatically once a loader reports them, with no redeploy. The last good
+  listing is cached in Cloudflare so script loading keeps working if the GitHub
+  API is briefly rate-limited or down.
 - **Only shows games that currently have executions.** A game with zero runs is
   never listed on Discord. A game stops appearing only if it is removed from
   the Ouroboros folder or its count is reset.
