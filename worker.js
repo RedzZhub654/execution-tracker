@@ -1,7 +1,3 @@
-// Execution Tracker — Cloudflare Worker + Durable Object
-// Monitors the Ouroboros games folder on GitHub and shows a live, auto-updating
-// Discord message listing ONLY games that currently have executions.
-
 const REFRESH_INTERVAL_MS = 10_000;
 const MAX_FIELDS_PER_EMBED = 25;
 const MAX_EMBEDS_PER_MSG = 10;
